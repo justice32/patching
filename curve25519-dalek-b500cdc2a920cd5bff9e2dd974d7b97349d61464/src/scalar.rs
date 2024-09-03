@@ -94,6 +94,8 @@
 //! # extern crate curve25519_dalek;
 //! # extern crate sha2;
 //! #
+//! 
+
 //! # fn main() {
 //! use sha2::{Digest, Sha512};
 //! use curve25519_dalek::scalar::Scalar;
@@ -152,43 +154,88 @@ use core::ops::{Sub, SubAssign};
 #[allow(unused_imports)]
 use prelude::*;
 
+
+#[cfg(any(test, feature = "rand_core"))]
 use rand_core::{CryptoRng, RngCore};
 
 use digest::generic_array::typenum::U64;
+use digest::Digest;
+
+
+#[cfg(feature = "digest")]
+use digest::generic_array::typenum::U64;
+#[cfg(feature = "digest")]
 use digest::Digest;
 
 use subtle::Choice;
 use subtle::ConditionallySelectable;
 use subtle::ConstantTimeEq;
 
-use zeroize::Zeroize;
 
+#[cfg(feature = "group-bits")]
+use group::ff::{FieldBits, PrimeFieldBits};
+#[cfg(feature = "group")]
+use {
+    group::ff::{Field, FromUniformBytes, PrimeField},
+    rand_core::RngCore,
+};
+
+#[cfg(feature = "zeroize")]
+use zeroize::Zeroize;
+extern crate cfg_if;
 use backend;
+
+#[cfg(not(all(target_os = "zkvm", target_arch = "riscv32")))]
+use self::cfg_if::cfg_if;
 use constants;
 
-/// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
-///
-/// This is a type alias for one of the scalar types in the `backend`
-/// module.
-#[cfg(feature = "fiat_u32_backend")]
-type UnpackedScalar = backend::serial::fiat_u32::scalar::Scalar29;
-#[cfg(feature = "fiat_u64_backend")]
-type UnpackedScalar = backend::serial::fiat_u64::scalar::Scalar52;
 
-/// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
-///
-/// This is a type alias for one of the scalar types in the `backend`
-/// module.
-#[cfg(feature = "u64_backend")]
-type UnpackedScalar = backend::serial::u64::scalar::Scalar52;
 
-/// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
-///
-/// This is a type alias for one of the scalar types in the `backend`
-/// module.
-#[cfg(feature = "u32_backend")]
-type UnpackedScalar = backend::serial::u32::scalar::Scalar29;
+cfg_if! {
+    if #[cfg(curve25519_dalek_backend = "fiat")] {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend`
+        /// module.
+        #[cfg(curve25519_dalek_bits = "32")]
+        #[cfg_attr(
+            docsrs,
+            doc(cfg(all(feature = "fiat_backend", curve25519_dalek_bits = "32")))
+        )]
+        type UnpackedScalar = backend::serial::fiat_u32::scalar::Scalar29;
 
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend`
+        /// module.
+        #[cfg(curve25519_dalek_bits = "64")]
+        #[cfg_attr(
+            docsrs,
+            doc(cfg(all(feature = "fiat_backend", curve25519_dalek_bits = "64")))
+        )]
+        type UnpackedScalar = backend::serial::fiat_u64::scalar::Scalar52;
+    } else if #[cfg(curve25519_dalek_bits = "64")] {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend`
+        /// module.
+        #[cfg_attr(docsrs, doc(cfg(curve25519_dalek_bits = "64")))]
+        type UnpackedScalar = backend::serial::u64::scalar::Scalar52;
+    } else if #[cfg(all(target_os = "zkvm", target_arch = "riscv32"))] {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend`
+        /// module.
+        type UnpackedScalar = backend::serial::risc0::scalar::ScalarR0;
+    } else {
+        /// An `UnpackedScalar` represents an element of the field GF(l), optimized for speed.
+        ///
+        /// This is a type alias for one of the scalar types in the `backend`
+        /// module.
+        #[cfg_attr(docsrs, doc(cfg(curve25519_dalek_bits = "64")))]
+        type UnpackedScalar = backend::serial::u32::scalar::Scalar29;
+    }
+}
 
 /// The `Scalar` struct holds an integer \\(s < 2\^{255} \\) which
 /// represents an element of \\(\mathbb Z / \ell\\).
@@ -364,9 +411,15 @@ impl<'a> Neg for &'a Scalar {
     type Output = Scalar;
     #[allow(non_snake_case)]
     fn neg(self) -> Scalar {
-        let self_R = UnpackedScalar::mul_internal(&self.unpack(), &constants::R);
-        let self_mod_l = UnpackedScalar::montgomery_reduce(&self_R);
-        UnpackedScalar::sub(&UnpackedScalar::zero(), &self_mod_l).pack()
+        cfg_if! {
+            if #[cfg(all(target_os = "zkvm", target_arch = "riscv32"))] {
+                UnpackedScalar::negate(&self.unpack()).pack()
+            } else {
+                let self_R = UnpackedScalar::mul_internal(&self.unpack(), &constants::R);
+                let self_mod_l = UnpackedScalar::montgomery_reduce(&self_R);
+                UnpackedScalar::sub(&UnpackedScalar::ZERO, &self_mod_l).pack()
+            }
+        }
     }
 }
 
@@ -533,7 +586,7 @@ impl From<u128> for Scalar {
         Scalar{ bytes: s_bytes }
     }
 }
-
+#[cfg(feature = "zeroize")]
 impl Zeroize for Scalar {
     fn zeroize(&mut self) {
         self.bytes.zeroize();
@@ -556,7 +609,8 @@ impl Scalar {
     /// ```
     /// extern crate rand_core;
     /// # extern crate curve25519_dalek;
-    /// #
+    /// #[cfg(any(test, feature = "rand_core"))]
+
     /// # fn main() {
     /// use curve25519_dalek::scalar::Scalar;
     ///
@@ -571,6 +625,7 @@ impl Scalar {
         Scalar::from_bytes_mod_order_wide(&scalar_bytes)
     }
 
+    
     /// Hash a slice of bytes into a scalar.
     ///
     /// Takes a type parameter `D`, which is any `Digest` producing 64
@@ -1103,8 +1158,15 @@ impl Scalar {
     #[allow(non_snake_case)]
     pub fn reduce(&self) -> Scalar {
         let x = self.unpack();
-        let xR = UnpackedScalar::mul_internal(&x, &constants::R);
-        let x_mod_l = UnpackedScalar::montgomery_reduce(&xR);
+        
+        cfg_if! {
+            if #[cfg(all(target_os = "zkvm", target_arch = "riscv32"))] {
+                let x_mod_l = UnpackedScalar::reduce(&x);
+            } else {
+                let xR = UnpackedScalar::mul_internal(&x, &constants::R);
+                let x_mod_l = UnpackedScalar::montgomery_reduce(&xR);
+            }
+        }
         x_mod_l.pack()
     }
 
@@ -1200,10 +1262,12 @@ impl UnpackedScalar {
 }
 
 #[cfg(test)]
-mod test {
+pub (crate) mod test {
     use super::*;
+    #[cfg(not(all(target_os = "zkvm", target_arch = "riscv32")))]
     use constants;
-
+    #[cfg(feature = "alloc")]
+	
     /// x = 2238329342913194256032495932344128051776374960164957527413114840482143558222
     pub static X: Scalar = Scalar{
         bytes: [
@@ -1633,12 +1697,21 @@ mod test {
         // The reduced scalar should match the expected
         assert_eq!(reduced.bytes, expected.bytes);
 
-        //  (x + 2^256x) * R
-        let interim = UnpackedScalar::mul_internal(&UnpackedScalar::from_bytes_wide(&bignum),
-                                                   &constants::R);
-        // ((x + 2^256x) * R) / R  (mod l)
-        let montgomery_reduced = UnpackedScalar::montgomery_reduce(&interim);
-
+        // //  (x + 2^256x) * R
+        // let interim = UnpackedScalar::mul_internal(&UnpackedScalar::from_bytes_wide(&bignum),
+        //                                            &constants::R);
+        // // ((x + 2^256x) * R) / R  (mod l)
+        // let montgomery_reduced = UnpackedScalar::montgomery_reduce(&interim);
+        cfg_if! {
+            if #[cfg(all(target_os = "zkvm", target_arch = "riscv32"))] {
+                let montgomery_reduced = UnpackedScalar::reduce(&UnpackedScalar::from_bytes_wide(&bignum));
+            } else {
+                let interim =
+                    UnpackedScalar::mul_internal(&UnpackedScalar::from_bytes_wide(&bignum), &constants::R);
+                // ((x + 2^256x) * R) / R  (mod l)
+                let montgomery_reduced = UnpackedScalar::montgomery_reduce(&interim);
+            }
+        }
         // The Montgomery reduced scalar should match the reduced one, as well as the expected
         assert_eq!(montgomery_reduced.0, reduced.unpack().0);
         assert_eq!(montgomery_reduced.0, expected.unpack().0)

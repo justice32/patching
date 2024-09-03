@@ -28,20 +28,32 @@
 
 #![allow(non_snake_case)]
 
+extern crate cfg_if;
+
 use edwards::CompressedEdwardsY;
 use ristretto::RistrettoPoint;
 use ristretto::CompressedRistretto;
 use montgomery::MontgomeryPoint;
 use scalar::Scalar;
+use constants::cfg_if::cfg_if;
+#[cfg(feature = "precomputed-tables")]
+use crate::edwards::EdwardsBasepointTable;
 
-#[cfg(feature = "fiat_u32_backend")]
-pub use backend::serial::fiat_u32::constants::*;
-#[cfg(feature = "fiat_u64_backend")]
-pub use backend::serial::fiat_u64::constants::*;
-#[cfg(feature = "u64_backend")]
-pub use backend::serial::u64::constants::*;
-#[cfg(feature = "u32_backend")]
-pub use backend::serial::u32::constants::*;
+cfg_if! {
+    if #[cfg(curve25519_dalek_backend = "fiat")] {
+        #[cfg(curve25519_dalek_bits = "32")]
+        pub use crate::backend::serial::fiat_u32::constants::*;
+        #[cfg(curve25519_dalek_bits = "64")]
+        pub use crate::backend::serial::fiat_u64::constants::*;
+    } else if  #[cfg(all(target_os = "zkvm", target_arch = "riscv32"))] {
+        pub use crate::backend::serial::risc0::constants::*;
+    } else {
+        #[cfg(curve25519_dalek_bits = "32")]
+        pub use crate::backend::serial::u32::constants::*;
+        #[cfg(curve25519_dalek_bits = "64")]
+        pub use crate::backend::serial::u64::constants::*;
+    }
+}
 
 /// The Ed25519 basepoint, in `CompressedEdwardsY` format.
 ///
@@ -88,10 +100,17 @@ pub const BASEPOINT_ORDER: Scalar = Scalar{
     ],
 };
 
-use ristretto::RistrettoBasepointTable;
+#[cfg(feature = "precomputed-tables")]
+use crate::ristretto::RistrettoBasepointTable;
+
 /// The Ristretto basepoint, as a `RistrettoBasepointTable` for scalar multiplication.
-pub const RISTRETTO_BASEPOINT_TABLE: RistrettoBasepointTable
-    = RistrettoBasepointTable(ED25519_BASEPOINT_TABLE);
+#[cfg(feature = "precomputed-tables")]
+pub static RISTRETTO_BASEPOINT_TABLE: &RistrettoBasepointTable = unsafe {
+    // SAFETY: `RistrettoBasepointTable` is a `#[repr(transparent)]` newtype of
+    // `EdwardsBasepointTable`
+    &*(ED25519_BASEPOINT_TABLE as *const EdwardsBasepointTable as *const RistrettoBasepointTable)
+};
+
 
 #[cfg(test)]
 mod test {

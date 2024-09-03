@@ -33,9 +33,24 @@ travis-ci = { repository = "dalek-cryptography/curve25519-dalek", branch = "mast
 [dev-dependencies]
 sha2 = { version = "0.9", default-features = false }
 bincode = "1"
-criterion = { version = "0.3.0", features = ["html_reports"] }
+#criterion = { version = "0.3.0", features = ["html_reports"] }
 hex = "0.4.2"
 rand = "0.7"
+
+[target.'cfg(target_os = "zkvm")'.dependencies]
+# Use crypto-bigint v0.5.2, which is overridden with a patch for RISC Zero acceleration.
+crypto-bigint = { version = "=0.5.2", default-features = false, features = ["zeroize"] }
+
+[target.'cfg(not(target_os = "zkvm"))'.dev-dependencies]
+criterion = { version = "0.5.1", features = ["html_reports"] }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+cpufeatures = "0.2.6"
+
+[target.'cfg(curve25519_dalek_backend = "fiat")'.dependencies]
+fiat-crypto = { version = "0.2.1", default-features = false }
+
+
 
 [[bench]]
 name = "dalek_benchmarks"
@@ -52,6 +67,12 @@ serde = { version = "1.0", default-features = false, optional = true, features =
 packed_simd = { version = "0.3.4", package = "packed_simd_2", features = ["into_bits"], optional = true }
 zeroize = { version = "1", default-features = false }
 fiat-crypto = { version = "0.1.6", optional = true}
+cfg-if = "1"
+
+[build-dependencies]
+platforms = "3.0.2"
+rustc_version = "0.4.0"
+
 
 [features]
 nightly = ["subtle/nightly"]
@@ -72,3 +93,7 @@ simd_backend = ["nightly", "u64_backend", "packed_simd"]
 # DEPRECATED: this is now an alias for `simd_backend` and may be removed
 # in some future release.
 avx2_backend = ["simd_backend"]
+
+
+[target.'cfg(all(not(curve25519_dalek_backend = "fiat"), not(curve25519_dalek_backend = "serial"), target_arch = "x86_64"))'.dependencies]
+curve25519-dalek-derive = { version = "0.1", path = "../curve25519-dalek-derive" }
